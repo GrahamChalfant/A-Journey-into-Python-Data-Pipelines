@@ -1,0 +1,85 @@
+from selenium.webdriver.support import expected_conditions as EC
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service  # If something is grayed out it means its not having an effect
+import time
+import pandas as pd
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.wait import WebDriverWait
+
+chrome_options = webdriver.ChromeOptions()
+chrome_options.add_argument('--headless')
+chrome_options.add_argument('--no-sandbox')
+chrome_options.add_argument('--disable-dev-shm-usage')
+chrome_options.add_argument('--disable-gpu')
+# Add your desired options, e.g., chrome_options.add_argument('--headless')
+
+chrome_driver_binary = '/opt/homebrew/bin/chromedriver'  # Replace with the path to your ChromeDriver executable
+# chrome_options.binary_location = '/opt/homebrew/bin/chromium'
+
+# Pass a Service object with the executable_path parameter
+service = Service(executable_path=chrome_driver_binary)
+driver = webdriver.Chrome(service=service, options=chrome_options)
+
+# Open the webpage
+driver.get('https://www.homesearchofnashville.com/results-gallery/?custom=117260&photo=1&sort=importdate&status=A%2CCS')
+
+
+# Function to scroll the page
+def scroll_page(times):
+    body = driver.find_element(By.CSS_SELECTOR, 'body')
+    for _ in range(times):
+        body.send_keys(Keys.PAGE_DOWN)
+        time.sleep(1)
+
+
+# Function to click the "Load More Results" button
+def click_load_more_button():
+    try:
+        wait = WebDriverWait(driver, 3)  # Adjust the waiting time as needed
+        load_more_button = wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(text(), 'Load More Results')]"))) #Searched for text in button
+        load_more_button.click()
+    except Exception as e:
+        print("Load More Results button not found.")
+
+
+# Get the initial page length
+initial_page_length = driver.execute_script("return document.body.scrollHeight")
+
+while True:
+    # Scroll the page five times
+    scroll_page(10)
+
+    # Click the "Load More Results" button
+    click_load_more_button()
+
+    # Wait for the new results to load (adjust the sleep time as needed)
+    time.sleep(3)
+
+    # Get the new page length
+    new_page_length = driver.execute_script("return document.body.scrollHeight")
+
+    # Check if the page length has changed
+    if new_page_length == initial_page_length:
+        break
+    else:
+        initial_page_length = new_page_length
+
+print("The page length has stopped changing.")
+driver.implicitly_wait(1)
+
+# Find all anchor tags with the specified class
+href_elements = driver.find_elements(By.CSS_SELECTOR, 'a.bt-listing-teaser__link.js-full-deets')
+# Get the href attribute of each anchor tag
+href_list = [elem.get_attribute('href') for elem in href_elements]
+href_df = pd.DataFrame(href_list)
+print(href_df)
+# setting path to the main listing page to grab IDs I think this needs to be updated to include "DRIVER"
+
+#Saving to csv
+url_df_path = '/Users/grahamchalfant/Library/CloudStorage/Dropbox/Mac/Desktop/RealEstateProj/url_df'
+href_df.columns = {'urls'}
+href_df.to_csv(url_df_path, index=False)
+
+# Close the browser after everything has been scraped
+driver.quit()
