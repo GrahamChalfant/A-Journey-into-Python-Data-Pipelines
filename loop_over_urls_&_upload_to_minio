@@ -1,0 +1,163 @@
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service  # If something is grayed out it means its not having an effect
+import time
+import requests
+import pandas as pd
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.wait import WebDriverWait
+import tqdm as tqdm
+from minio import Minio
+from minio.error import S3Error
+import io
+import os
+
+# reading in the text file and removing whitespace
+file_path = "/Users/grahamchalfant/Library/CloudStorage/Dropbox/Mac/Desktop/RealEstateProj/url_df"
+with open(file_path, 'r') as file:
+    urls = [line.strip() for line in file.readlines()]
+
+url_length = len(urls)
+
+housing_df = pd.DataFrame(
+    columns=['ID', 'Address', 'Postalcode', 'Price', 'Acres', 'SqFeet', 'Price_Per_SqFeet', 'Baths', 'Half_Baths', 'Neighborhood',
+             'Built', 'County'])
+#iterate over the 'urls' column in my df not the data frame itself
+for index, url in enumerate(urls[1:], start=1):
+    print(f"Processing URL {index}/{len(urls) - 1}: {url}")
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    # The rest of your code here
+
+    id_elem = soup.find(lambda tag: tag.name == 'li' and "MLS #:" in tag.text)  # because 'uk-text-bold' is not unique I had to find the MLS # text first
+    id_elem = id_elem.find('span', class_='uk-text-bold')
+    if id_elem is not None:
+        id_info = id_elem.text.strip()
+    else:
+        id_info = None
+
+    address_elem = soup.find('span', {'itemprop': "streetAddress"})
+    if address_elem is not None:
+        address_info = address_elem.text.strip().replace('\n', ' ')
+    else:
+        address_info = None
+
+    postal_elem = soup.find('div', {'class', 'bt-listing__locations-list uk-text-muted my-0 at-city-state-zip-txt'})
+    if postal_elem is not None:
+        postal_elem = postal_elem.find('span', {'itemprop': 'postalCode'})
+        if postal_elem is not None:
+            postal_info = postal_elem.text.strip()
+        else:
+            postal_info = None
+    else:
+        postal_info = None
+
+    price_elem = soup.find('div', {'class': 'bt-heading__h1 bt-text--brand'})
+    if price_elem is not None:
+        price_info = price_elem.text.strip()
+    else:
+        price_info = None
+
+    acres_elem = soup.find('div', {'class': 'attr-num bt-listing__acreage-text'})
+    if acres_elem is not None:
+        acres_info = acres_elem.text.strip()
+    else:
+        acres_info = None
+
+    sqft_main_elem = soup.find('li', {'class': 'sqft'})  # for some reason the space after square feet was causing errors even though it is that way on the webpage
+    if sqft_main_elem is not None:
+        sqft_info = sqft_main_elem.text.strip()
+    else:
+        sqft_info = None
+
+    psqft_main_elem = soup.find('li', {'class': 'price-sqft'})  # for some reason the space after square feet was causing errors even though it is that way on the webpage
+    if psqft_main_elem is not None:
+        psqft_info = psqft_main_elem.text.strip()
+    else:
+        psqft_info = None
+
+    baths_main_elem = soup.find('li', {'class': 'baths'})  # for some reason the space after square feet was causing errors even though it is that way on the webpage
+    if baths_main_elem is not None:
+        baths_elem = baths_main_elem.find('div', {'class': 'attr-num'})
+        if baths_elem is not None:
+            baths_info = baths_elem.text.strip()
+        else:
+            baths_info = None
+    else: baths_info = None
+
+    half_baths_main_elem = soup.find('li', {'class': 'half-baths'})  # for some reason the space after square feet was causing errors even though it is that way on the webpage
+    if half_baths_main_elem is not None:
+        half_baths_elem = half_baths_main_elem.find('div', {'class': 'attr-num'})
+        if half_baths_elem is not None:
+            half_baths_info = half_baths_elem.text.strip()
+        else:
+            half_baths_info = None
+    else: half_baths_info = None
+
+    neigh = soup.find('a', {'class': 'js-listing-neighborhood'})
+    if neigh is not None:
+        neigh_info = neigh.text.strip()
+    else:
+        neigh_info = None
+
+    # Check if title_elem is not None before proceeding
+    title_elem = soup.find('div', {'class': 'cell cell-xs-3 text-semibold'}, string='Built:')
+    if title_elem is not None:
+        built_elem = title_elem.find_next_sibling('div', {'class': 'cell uk-text-right'})
+        if built_elem is not None:
+            built_info = built_elem.text.strip()
+        else:
+            built_info = None
+    else:
+        built_info = None
+
+    county_elem = soup.find('a', {'class': 'js-listing-county'})
+    if county_elem is not None:
+        county_info = county_elem.text.strip()
+    else:
+        county_info = None
+
+    housing_df = pd.concat([housing_df, pd.DataFrame.from_records(
+        [{'ID': id_info, 'Address': address_info, 'Postalcode': postal_info, 'Price': price_info, 'Acres': acres_info, 'SqFeet': sqft_info, 'Price_Per_SqFeet': psqft_info, 'Baths':baths_info, 'Half_Baths':half_baths_info, 'Neighborhood':neigh_info, 'Built': built_info, 'County': county_info}])])  # append method is being deprecated
+
+    print(f"Finished processing URL {index}/{len(urls) - 1}: {url}")
+
+
+housing_df['Address'] = housing_df['Address'].str.replace(r'\s+', ' ', regex=True).str.strip()
+housing_df['Price_Per_SqFeet'] = housing_df['Price_Per_SqFeet'].str.extract('(\d+)', expand=False).astype(float)
+housing_df['SqFeet'] = housing_df['SqFeet'].str.extract('(\d+)', expand=False).astype(float)
+housing_df['Built'] = housing_df['Built'].fillna(0).astype(int)
+housing_df['Postalcode'] = housing_df['Postalcode'].fillna(0).astype(int)
+
+
+pd.set_option('display.max_columns', None)
+print(housing_df)
+
+#Sending Raw Realestate Data to MinIO
+minio_client = Minio(
+    "127.0.0.1:9000",
+    access_key="minioadmin",
+    secret_key="minioadmin",
+    secure=False,  # Set to False if your MinIO server is not using HTTPS
+)
+
+bucket_name = "realestate1"
+try:
+    minio_client.make_bucket(bucket_name)
+except S3Error as e:
+    if e.code == "BucketAlreadyOwnedByYou":
+        print(f"Bucket '{bucket_name}' already exists.")
+    else:
+        raise e
+
+object_name = "raw_listing_data.csv"
+csv_data = housing_df.to_csv(index=False).encode("utf-8")
+csv_buffer = io.BytesIO(csv_data)
+
+try:
+    minio_client.put_object(bucket_name, object_name, csv_buffer, length=len(csv_data), content_type="text/csv")
+    print(f"CSV file '{object_name}' uploaded to bucket '{bucket_name}'.")
+except S3Error as e:
+    print("Error uploading CSV:", e)
